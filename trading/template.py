@@ -105,20 +105,20 @@ class Strategy:
     def __init__(self) -> None:
         self.reset_state()
 
-    def moving_average(self, side, n = 5):
+    def moving_average(self, side, n = 10):
         try:
-            return (np.convolve(np.array(self.pricebook)[:,side], np.ones(n), "valid") / n)[-1]
+            return (np.convolve(np.mean(np.array(self.pricebook[:,side]), axis = 0), np.ones(n), "valid") / n)[-1]
         except:
             pass
 
     def RSI(self, span = 7):
         try:
-            if sum(self.pricebook[-1])/2 > sum(self.pricebook[-2])/2:
-                self.U.append(sum(self.pricebook[-1])/2)
+            if np.mean(self.pricebook[-1]) > np.mean(self.pricebook[-2]):
+                self.U.append(self.pricebook[-1])
                 self.D.append(0)
-            elif sum(self.pricebook[-1])/2 < sum(self.pricebook[-2])/2:
+            elif np.mean(self.pricebook[-1]) < np.mean(self.pricebook[-2]):
                 self.U.append(0)
-                self.D.append(sum(self.pricebook[-1])/2)
+                self.D.append(self.pricebook[-1])
             else:
                 self.U.append(0)
                 self.D.append(0)
@@ -206,7 +206,37 @@ class Strategy:
         asks  
             List of (price, quantity) tuples for all current asks, sorted by price ascending
         """
-        self.pricebook.append([bids[0][0], asks[0][0]])
+        
+        self.pricebook.append([[bids[0], bids[-1]], [asks[0], asks[-1]]])
+
+        try:
+            if (np.mean(self.pricebook[-1][1]) >= 90) and not self.already_bought90 and self.pricebook[-1][1][0] < 90:
+                place_limit_order(Side(0), Ticker(0), quantity = asks[0][1], price = asks[0][0], ioc = True)
+                self.already_bought90 = True
+            if (self.moving_average(7) >= np.mean(self.pricebook[-1][1])) and not self.already_boughtMA:
+                place_market_order(Side(0), Ticker(0), quantity = 10)
+                self.already_boughtMA = True
+            
+            if self.already_bought90 and (85 >= np.mean(self.pricebook[-1][0])) and self.pricebook[-1][0][0] > 85:
+                place_limit_order(Side(0), Ticker(0), quantity = asks[-1][1], price = asks[-1][0], ioc = True)
+                self.already_bought90 = False
+            if (self.moving_average(7) <= np.mean(self.pricebook[-1][0])) and self.already_boughtMA:
+                place_market_order(Side(1), Ticker(0), quantity = 10)
+                self.already_boughtMA = False
+        except IndexError:
+            pass
+
+        self.RSI()
+
+        try:
+            if self.xRSI[-2] < 30 and self.xRSI[-1] > 30 and not self.RSI_Bought:
+                place_market_order(Side(0), Ticker(0), quantity = 30)
+                self.RSI_Bought = True
+            elif self.xRSI[-2] > 70 and self.xRSI[-1] < 70 and self.RSI_Bought:
+                place_market_order(Side(1), Ticker(0), quantity = 30)
+                self.RSI_Bought = False
+        except IndexError:
+            pass
 
     def on_game_event_update(self,
                            event_type: str,
@@ -252,33 +282,13 @@ class Strategy:
         self.scorebook.append([home_score, away_score])
 
         try:
-            if (self.pricebook[-1][1] >= 90) and not self.already_bought90:
-                place_market_order(Side(0), Ticker(0), quantity = 20)
-                self.already_bought90 = True
-            if (self.moving_average(0, 7) >= self.pricebook[-1][1]) and not self.already_boughtMA:
-                place_market_order(Side(0), Ticker(0), quantity = 10)
-                self.already_boughtMA = True
-            
-            elif self.already_bought90 and (85 >= self.pricebook[-1][0]):
-                place_market_order(Side(1), Ticker(0), quantity = 20)
-                self.already_bought90 = False
-            if (self.moving_average(1, 7) <= self.pricebook[-1][0]) and self.already_boughtMA:
-                place_market_order(Side(1), Ticker(0), quantity = 10)
-                self.already_boughtMA = False
+            if self.scorebook[-1][0]/self.scorebook[-1][1] > 1 and self.scorebook[-2][0]/self.scorebook[-2][1] < 1:
+                place_market_order(side = Side(0), ticker= Ticker(0), quantity = 5)
+            elif self.scorebook[-1][0]/self.scorebook[-1][1] < 1 and self.scorebook[-2][0]/self.scorebook[-2][1] > 1:
+                place_market_order(side = Side(1), ticker= Ticker(0), quantity = 5)
         except IndexError:
             pass
 
-        self.RSI()
-
-        try:
-            if self.xRSI[-2] < 30 and self.xRSI[-1] > 30 and not self.RSI_Bought:
-                place_market_order(Side(0), Ticker(0), quantity = 30)
-                self.RSI_Bought = True
-            elif self.xRSI[-2] > 70 and self.xRSI[-1] < 70 and self.RSI_Bought:
-                place_market_order(Side(1), Ticker(0), quantity = 30)
-                self.RSI_Bought = False
-        except IndexError:
-            pass
 
         print(f"{event_type} {home_score} - {away_score}")
 
