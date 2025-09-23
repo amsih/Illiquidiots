@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <map>
 
 enum class Side { buy = 0, sell = 1 };
 enum class Ticker : std::uint8_t { TEAM_A = 0 }; // NOLINT
@@ -63,7 +64,7 @@ public:
    * and will not be replayed.
    */
   void reset_state() {
-    // Add any state reset logic here
+    map<string, float> players;
   }
 
   Strategy() {
@@ -139,6 +140,12 @@ public:
       const std::optional<double>& time_seconds
   ) {
     println(event_type + " " + std::to_string(home_score) + " - " + std::to_string(away_score));
+
+    if (event_type == "MISSED"){
+      if (rebound_type == "OFFENSIVE"){
+        
+      }
+    }
 
     if (event_type == "END_GAME") {
       // IMPORTANT: Highly recommended to call reset_state() when the

@@ -6,6 +6,8 @@ Algorithmic strategy template
 
 from enum import Enum
 from typing import Optional
+import numpy as np
+import pandas as pd
 
 class Side(Enum):
     BUY = 0
@@ -72,6 +74,16 @@ def cancel_order(ticker: Ticker, order_id: int) -> bool:
 class Strategy:
     """Template for a strategy."""
 
+    orderbook = []
+    pricebook = []
+    scorebook = []
+    U = []
+    D = []
+    xRSI = []
+    already_bought90 = False
+    already_boughtMA = False
+    RSI_Bought = False
+
     def reset_state(self) -> None:
         """Reset the state of the strategy to the start of game position.
         
@@ -81,11 +93,43 @@ class Strategy:
         Note: In production execution, the game will start from the beginning
         and will not be replayed.
         """
-        pass
+        self.scorebook = []
+        self.pricebook = []
+        self.U = []
+        self.D = []
+        self.xRSI = []
+        self.already_bought90 = False
+        self.already_boughtMA = False
+        self.RSI_Bought = False
 
     def __init__(self) -> None:
-        """Your initialization code goes here."""
         self.reset_state()
+
+    def moving_average(self, side, n = 5):
+        try:
+            return (np.convolve(np.array(self.pricebook)[:,side], np.ones(n), "valid") / n)[-1]
+        except:
+            pass
+
+    def RSI(self, span = 7):
+        try:
+            if sum(self.pricebook[-1])/2 > sum(self.pricebook[-2])/2:
+                self.U.append(sum(self.pricebook[-1])/2)
+                self.D.append(0)
+            elif sum(self.pricebook[-1])/2 < sum(self.pricebook[-2])/2:
+                self.U.append(0)
+                self.D.append(sum(self.pricebook[-1])/2)
+            else:
+                self.U.append(0)
+                self.D.append(0)
+            
+            Uema = pd.DataFrame(self.U, columns = ["Up"]).ewm(span, adjust = False).mean()
+            Dema = pd.DataFrame(self.D, columns = ["Up"]).ewm(span, adjust = False).mean()
+
+            RS = (Uema/Dema).to_numpy()
+            self.xRSI = 100 - 100/(1+RS)
+        except IndexError:
+            self.xRSI = []
 
     def on_trade_update(
         self, ticker: Ticker, side: Side, quantity: float, price: float
@@ -102,6 +146,7 @@ class Strategy:
         price
             Price that trade was executed at
         """
+
         print(f"Python Trade update: {ticker} {side} {quantity} shares @ {price}")
 
     def on_orderbook_update(
@@ -119,7 +164,7 @@ class Strategy:
         quantity
             Volume placed into orderbook
         """
-        pass
+        self.orderbook.append([ticker, side, quantity, price])
 
     def on_account_update(
         self,
@@ -143,7 +188,25 @@ class Strategy:
         capital_remaining
             Amount of capital after fulfilling order
         """
-        pass
+
+        print(f"Order Fulfilled!")
+
+    def on_orderbook_snapshot(self, ticker: Ticker, bids: list, asks: list) -> None:
+        """Called periodically with a complete snapshot of the orderbook.
+
+        This provides the full current state of all bids and asks, useful for 
+        verification and algorithms that need the complete market picture.
+
+        Parameters
+        ----------
+        ticker
+            Ticker of the orderbook snapshot (Ticker.TEAM_A)
+        bids
+            List of (price, quantity) tuples for all current bids, sorted by price descending
+        asks  
+            List of (price, quantity) tuples for all current asks, sorted by price ascending
+        """
+        self.pricebook.append([bids[0][0], asks[0][0]])
 
     def on_game_event_update(self,
                            event_type: str,
@@ -186,6 +249,37 @@ class Strategy:
             Game time remaining in seconds
         """
 
+        self.scorebook.append([home_score, away_score])
+
+        try:
+            if (self.pricebook[-1][1] >= 90) and not self.already_bought90:
+                place_market_order(Side(0), Ticker(0), quantity = 20)
+                self.already_bought90 = True
+            if (self.moving_average(0, 7) >= self.pricebook[-1][1]) and not self.already_boughtMA:
+                place_market_order(Side(0), Ticker(0), quantity = 10)
+                self.already_boughtMA = True
+            
+            elif self.already_bought90 and (85 >= self.pricebook[-1][0]):
+                place_market_order(Side(1), Ticker(0), quantity = 20)
+                self.already_bought90 = False
+            if (self.moving_average(1, 7) <= self.pricebook[-1][0]) and self.already_boughtMA:
+                place_market_order(Side(1), Ticker(0), quantity = 10)
+                self.already_boughtMA = False
+        except IndexError:
+            pass
+
+        self.RSI()
+
+        try:
+            if self.xRSI[-2] < 30 and self.xRSI[-1] > 30 and not self.RSI_Bought:
+                place_market_order(Side(0), Ticker(0), quantity = 30)
+                self.RSI_Bought = True
+            elif self.xRSI[-2] > 70 and self.xRSI[-1] < 70 and self.RSI_Bought:
+                place_market_order(Side(1), Ticker(0), quantity = 30)
+                self.RSI_Bought = False
+        except IndexError:
+            pass
+
         print(f"{event_type} {home_score} - {away_score}")
 
         if event_type == "END_GAME":
@@ -193,3 +287,4 @@ class Strategy:
             # game ends. See reset_state() for more details.
             self.reset_state()
             return
+
