@@ -79,10 +79,10 @@ class Strategy:
     scorebook = []
     U = []
     D = []
-    xRSI = []
     already_bought90 = False
-    already_boughtMA = False
-    RSI_Bought = False
+    already_bought10  =False
+    already_boughtspread = False
+    already_soldspread = False
 
     def reset_state(self) -> None:
         """Reset the state of the strategy to the start of game position.
@@ -97,39 +97,19 @@ class Strategy:
         self.pricebook = []
         self.U = []
         self.D = []
-        self.xRSI = []
         self.already_bought90 = False
-        self.already_boughtMA = False
-        self.RSI_Bought = False
+        self.already_bought10 = False
+        self.already_boughtspread = False
+        self.already_soldspread = False
 
     def __init__(self) -> None:
         self.reset_state()
 
-    def moving_average(self, side, n = 10):
+    def moving_average(self, n = 5, book = pricebook):
         try:
-            return (np.convolve(np.mean(np.array(self.pricebook[:,side]), axis = 0), np.ones(n), "valid") / n)[-1]
+            return np.convolve(book, np.ones(n), "valid") / n
         except:
             pass
-
-    def RSI(self, span = 7):
-        try:
-            if np.mean(self.pricebook[-1]) > np.mean(self.pricebook[-2]):
-                self.U.append(self.pricebook[-1])
-                self.D.append(0)
-            elif np.mean(self.pricebook[-1]) < np.mean(self.pricebook[-2]):
-                self.U.append(0)
-                self.D.append(self.pricebook[-1])
-            else:
-                self.U.append(0)
-                self.D.append(0)
-            
-            Uema = pd.DataFrame(self.U, columns = ["Up"]).ewm(span, adjust = False).mean()
-            Dema = pd.DataFrame(self.D, columns = ["Up"]).ewm(span, adjust = False).mean()
-
-            RS = (Uema/Dema).to_numpy()
-            self.xRSI = 100 - 100/(1+RS)
-        except IndexError:
-            self.xRSI = []
 
     def on_trade_update(
         self, ticker: Ticker, side: Side, quantity: float, price: float
@@ -164,7 +144,6 @@ class Strategy:
         quantity
             Volume placed into orderbook
         """
-        self.orderbook.append([ticker, side, quantity, price])
 
     def on_account_update(
         self,
@@ -189,8 +168,8 @@ class Strategy:
             Amount of capital after fulfilling order
         """
 
-        print(f"Order Fulfilled!")
-
+        print(f"order fulfilled")
+    
     def on_orderbook_snapshot(self, ticker: Ticker, bids: list, asks: list) -> None:
         """Called periodically with a complete snapshot of the orderbook.
 
@@ -206,35 +185,27 @@ class Strategy:
         asks  
             List of (price, quantity) tuples for all current asks, sorted by price ascending
         """
-        
-        self.pricebook.append([[bids[0], bids[-1]], [asks[0], asks[-1]]])
+
+        self.pricebook.append((np.mean([b[0] for b in bids]) + np.mean([a[0] for a in asks])) / 2)
+
+        MA10 = self.moving_average(10)
+        MA20 = self.moving_average(20)
 
         try:
-            if (np.mean(self.pricebook[-1][1]) >= 90) and not self.already_bought90 and self.pricebook[-1][1][0] < 90:
-                place_limit_order(Side(0), Ticker(0), quantity = asks[0][1], price = asks[0][0], ioc = True)
+            if self.pricebook[-1] >= 90 and not self.already_bought90:
+                place_market_order(Side.BUY, Ticker.TEAM_A, quantity = 50)
                 self.already_bought90 = True
-            if (self.moving_average(7) >= np.mean(self.pricebook[-1][1])) and not self.already_boughtMA:
-                place_market_order(Side(0), Ticker(0), quantity = 10)
+            elif self.pricebook[-1] <= 10 and not self.already_bought10:
+                place_market_order(Side.SELL, Ticker.TEAM_A, quantity = 50)
+                self.already_bought10 = True
+
+            if MA10[-1] >= MA20[-1] and MA10[-2] < MA20[-2]:
+                place_market_order(Side.BUY, Ticker.TEAM_A, quantity = (MA10[-1] - MA20[-1]) * 100)
                 self.already_boughtMA = True
-            
-            if self.already_bought90 and (85 >= np.mean(self.pricebook[-1][0])) and self.pricebook[-1][0][0] > 85:
-                place_limit_order(Side(0), Ticker(0), quantity = asks[-1][1], price = asks[-1][0], ioc = True)
-                self.already_bought90 = False
-            if (self.moving_average(7) <= np.mean(self.pricebook[-1][0])) and self.already_boughtMA:
-                place_market_order(Side(1), Ticker(0), quantity = 10)
+
+            if MA10[-1] <= MA20[-1] and MA10[-2] > MA20[-2]:
+                place_market_order(Side.SELL, Ticker.TEAM_A, quantity = (MA20[-1] - MA10[-1]) * 100)
                 self.already_boughtMA = False
-        except IndexError:
-            pass
-
-        self.RSI()
-
-        try:
-            if self.xRSI[-2] < 30 and self.xRSI[-1] > 30 and not self.RSI_Bought:
-                place_market_order(Side(0), Ticker(0), quantity = 30)
-                self.RSI_Bought = True
-            elif self.xRSI[-2] > 70 and self.xRSI[-1] < 70 and self.RSI_Bought:
-                place_market_order(Side(1), Ticker(0), quantity = 30)
-                self.RSI_Bought = False
         except IndexError:
             pass
 
@@ -279,22 +250,56 @@ class Strategy:
             Game time remaining in seconds
         """
 
-        self.scorebook.append([home_score, away_score])
 
-        try:
-            if self.scorebook[-1][0]/self.scorebook[-1][1] > 1 and self.scorebook[-2][0]/self.scorebook[-2][1] < 1:
-                place_market_order(side = Side(0), ticker= Ticker(0), quantity = 5)
-            elif self.scorebook[-1][0]/self.scorebook[-1][1] < 1 and self.scorebook[-2][0]/self.scorebook[-2][1] > 1:
-                place_market_order(side = Side(1), ticker= Ticker(0), quantity = 5)
-        except IndexError:
+        if event_type == "SCORE":
+            self.scorebook.append([home_score, away_score])
+
+        if time_seconds > 2000:
             pass
+        
+        else:
+            try:
+                scoreMAHome10 = self.moving_average(10, np.array(self.scorebook)[:,0]) 
+                scoreMAAway10 = self.moving_average(10, np.array(self.scorebook)[:,1])
+                scoreMAHome5 = self.moving_average(5, np.array(self.scorebook)[:,0]) 
+                scoreMAAway5 = self.moving_average(5, np.array(self.scorebook)[:,1])
 
+
+                if scoreMAHome5[-1] >= scoreMAHome10[-1] and scoreMAHome5[-2] < scoreMAHome10[-2] and self.scorebook[-1][0] > self.scorebook[-1][1]:
+                    place_market_order(side = Side.BUY, ticker = Ticker.TEAM_A, quantity = (self.scorebook[-1][0] - self.scorebook[-1][1]) * 4)
+                elif scoreMAHome5[-1] < scoreMAHome10[-1] and scoreMAHome5[-2] >= scoreMAHome10[-2] and self.scorebook[-1][0] < self.scorebook[-1][1]:
+                    place_market_order(side = Side.SELL, ticker = Ticker.TEAM_A, quantity = (self.scorebook[-1][1] - self.scorebook[-1][0]) * 4)
+
+                if scoreMAAway5[-1] >= scoreMAAway10[-1] and scoreMAAway5[-2] < scoreMAAway10[-2] and self.scorebook[-1][1] > self.scorebook[-1][0]:
+                    place_market_order(side = Side.SELL, ticker = Ticker.TEAM_A, quantity = (self.scorebook[-1][1] - self.scorebook[-1][0]) * 4)
+                elif scoreMAAway5[-1] < scoreMAAway10[-1] and scoreMAAway5[-2] >= scoreMAAway10[-2] and self.scorebook[-1][1] < self.scorebook[-1][0]:
+                    place_market_order(side = Side.BUY, ticker = Ticker.TEAM_A, quantity = (self.scorebook[-1][0] - self.scorebook[-1][1]) * 4)
+
+                if self.scorebook[-1][0] > self.scorebook[-1][1] + 10 and not self.already_boughtspread:
+                    spread = (self.scorebook[-1][0] - self.scorebook[-2][0]) * 10
+                    place_market_order(side = Side.BUY, ticker = Ticker.TEAM_A, quantity = spread)
+                    self.already_boughtspread = True
+                elif self.already_boughtspread and self.scorebook[-1][0] < self.scorebook[-1][1] - 5:
+                    place_market_order(side = Side.SELL, ticker=Ticker.TEAM_A, quantity = spread)     
+                    self.already_boughtspread = False
+            
+                if self.scorebook[-1][0] < self.scorebook[-1][1] + 10 and not self.already_soldspread:
+                    spread = (self.scorebook[-1][0] - self.scorebook[-2][0]) * 10
+                    place_market_order(side = Side.SELL, ticker = Ticker.TEAM_A, quantity = spread)
+                    self.already_boughtspread = True
+                elif self.already_soldspread and self.scorebook[-1][0] > self.scorebook[-1][1] - 5:
+                    place_market_order(side = Side.BUY, ticker=Ticker.TEAM_A, quantity = spread)     
+                    self.already_boughtspread = False            
+
+            except IndexError:
+                pass
 
         print(f"{event_type} {home_score} - {away_score}")
 
         if event_type == "END_GAME":
             # IMPORTANT: Highly recommended to call reset_state() when the
             # game ends. See reset_state() for more details.
+
             self.reset_state()
             return
 
